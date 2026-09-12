@@ -25,7 +25,8 @@ not start an audio device and should remain portable.
 5. Explain privacy or permission changes explicitly in the pull request.
 
 Do not commit generated audio, Sonic Pi binaries or SynthDefs, secrets, calendar
-content, application histories, or other personal context.
+content, application histories, AI session logs, prompts, responses, usage exports,
+or other personal context. Tests for adapters must use synthetic records.
 
 ## Musical changes
 

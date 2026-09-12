@@ -7,26 +7,34 @@ layer can evolve without giving the audio server access to private data.
 Context adapters                 Control plane                 Audio plane
 ─────────────────               ─────────────────             ───────────────
 frontmost app ─┐
-Git activity ──┼─> ContextCollector ─> DayState ─> director ─OSC─> SuperSonic
-calendar time ─┤         │              0..1 values     │          │
-manual input ──┘         └─ raw data ends here          └─ clock   └─ speakers
+system load ───┤
+open apps ─────┼─> ContextCollector ─> DayState ─> director ─OSC─> SuperSonic
+Git activity ──┤         │              aggregates      │          │
+calendar time ─┤         └─ raw data ends here          └─ clock   └─ speakers
+AI counters ───┤
+manual input ──┘
 ```
 
 ## Context layer
 
 `ContextCollector` owns platform-specific access. It emits a `DayState` containing
-only normalized focus, energy, urgency, social-load, meeting, and scene fields. Raw
-window, repository, or calendar values should not cross this boundary.
+only normalized musical controls, aggregate counters, event signals, and scene
+fields. Raw window, repository, calendar, or session-log records do not cross this
+boundary.
 
 The current macOS adapters use `NSWorkspace` for the frontmost application, Git's
-porcelain status for a changed-file count, and an opt-in AppleScript query for
-calendar timing aggregates.
+porcelain status for a changed-file count, `ps` and `memory_pressure` for system
+load, and an opt-in AppleScript query for calendar timing aggregates. An optional
+local token adapter reduces recent Codex and Claude session records to rolling token
+rates without retaining message content.
 
 ## Director
 
-The command-line process owns one monotonic transport. It samples context every 15
-seconds, smooths numeric changes, and holds scene changes until an eight-bar phrase
-boundary. User commands override inferred state.
+The command-line process owns one monotonic transport. A background worker samples
+context every three seconds, while the timing thread only reads immutable snapshots.
+Numeric changes are smoothed and scene changes wait for an eight-bar phrase
+boundary. Manual scenes override inferred musical state while live environment
+signals remain active.
 
 The director, not the audio engine, is the intended MCP boundary. This keeps agent
 latency and failures outside the real-time loop.
@@ -39,13 +47,16 @@ installation and creates all voices in a dedicated node group so pause and shutd
 can free them safely.
 
 The scheduler uses an eighth-note grid with one continuous clock. Long pad releases
-overlap chord changes; bass preserves the pulse; drums and melody change density in
-response to the smoothed state.
+overlap chord changes; bass preserves the pulse; several progression, motif, rhythm,
+and arpeggio banks rotate deterministically at musical boundaries. Context events
+add restrained accents without restarting the arrangement.
 
 ## Failure boundaries
 
 - Missing Calendar permission degrades to calendar-free operation.
 - Missing Git metadata produces a zero workload signal.
+- Missing or changed Codex/Claude local logs produce zero token activity.
+- Slow context adapters cannot block the music scheduler.
 - Missing audio assets stops startup with an actionable error.
 - `pause`, `quit`, signals, and normal shutdown clear the dedicated synth group.
 - The OSC command port binds to `127.0.0.1`, not the network.

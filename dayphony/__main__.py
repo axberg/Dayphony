@@ -9,7 +9,15 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from .context import ContextCollector, DayState, PRESETS, SCENES, with_energy
+from .context import (
+    ContextCollector,
+    ContextSampler,
+    DayState,
+    PRESETS,
+    SCENES,
+    with_energy,
+    with_live_context,
+)
 from .engine import AudioEngineError, MusicEngine, SuperSonicServer
 
 
@@ -20,10 +28,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mode", choices=("auto", "demo", *SCENES), default="auto")
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
-    parser.add_argument("--calendar", action="store_true", help="opt in to aggregate Calendar timing")
-    parser.add_argument("--duration", type=float, help="stop automatically after this many seconds")
+    parser.add_argument(
+        "--calendar", action="store_true", help="opt in to aggregate Calendar timing"
+    )
+    parser.add_argument(
+        "--ai-telemetry",
+        action="store_true",
+        help="opt in to local Codex and Claude token-rate estimates",
+    )
+    parser.add_argument(
+        "--duration", type=float, help="stop automatically after this many seconds"
+    )
     parser.add_argument("--demo-bars", type=int, default=8, help="bars per scene in demo mode")
-    parser.add_argument("--dry-run", action="store_true", help="run without starting the audio server")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="run without starting the audio server"
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -39,17 +58,32 @@ def input_worker(commands: queue.Queue[str]) -> None:
         commands.put(line.strip())
 
 
-def describe(state: DayState, app: str, mode: str) -> str:
+def describe(state: DayState, mode: str) -> str:
     return (
-        f"mode={mode:<8} scene={state.scene:<8} app={app:<18} "
+        f"mode={mode:<8} scene={state.scene:<8} app={state.active_app:<18} "
         f"focus={state.focus:.2f} energy={state.energy:.2f} "
-        f"urgency={state.urgency:.2f} social={state.social_load:.2f}"
+        f"urgency={state.urgency:.2f} social={state.social_load:.2f} | "
+        f"cpu={state.cpu_load:.0%} memory={state.memory_load:.0%} "
+        f"apps={state.open_apps} switches={state.app_switch_rate * 3:.1f}/min "
+        f"codex={state.codex_tps:.1f}t/s claude={state.claude_tps:.1f}t/s"
     )
+
+
+COMMANDS = (
+    "auto, focus, flow, pressure, recovery, energy <0..1>, "
+    "intensity <0..1>, pause, resume, status, help, quit"
+)
 
 
 def main() -> int:
     args = parse_args()
-    collector = ContextCollector(args.workspace, include_calendar=args.calendar)
+    collector = ContextCollector(
+        args.workspace,
+        include_calendar=args.calendar,
+        include_ai_telemetry=args.ai_telemetry,
+    )
+    sampler = ContextSampler(collector)
+    sampler.start()
     commands: queue.Queue[str] = queue.Queue()
     threading.Thread(target=input_worker, args=(commands,), daemon=True).start()
 
@@ -71,23 +105,25 @@ def main() -> int:
             engine = MusicEngine(server.client)
 
         mode = args.mode
-        target = PRESETS["focus"] if mode == "demo" else (
-            collector.sample() if mode == "auto" else PRESETS[mode]
-        )
+        sampled = sampler.latest()
+        if mode == "auto":
+            target = sampled
+        elif mode == "demo":
+            target = with_live_context(PRESETS["focus"], sampled)
+        else:
+            target = with_live_context(PRESETS[mode], sampled)
         current = replace(target, energy=0.12, urgency=0.05, source="startup")
         manual_energy: float | None = None
         muted = False
         step = 0
         started = time.monotonic()
         last_tick = started
-        last_context_sample = 0.0
         next_tick = started
         last_reported_bar = -1
         demo_scene_index = 0
 
         if not args.quiet:
-            print("Dayphony is running. Commands: auto, focus, flow, pressure, recovery,")
-            print("energy <0..1>, pause, resume, status, quit")
+            print(f"Dayphony is running. Commands: {COMMANDS}")
 
         while not stop_requested:
             now = time.monotonic()
@@ -118,7 +154,7 @@ def main() -> int:
                 elif name == "auto":
                     mode = "auto"
                     manual_energy = None
-                    target = collector.sample()
+                    target = sampler.latest()
                     print("Automatic context mode")
                 elif name in SCENES:
                     mode = name
@@ -133,7 +169,9 @@ def main() -> int:
                     except ValueError:
                         print("Energy must be a number from 0 to 1")
                 elif name == "status":
-                    print(describe(current, collector.last_app, mode))
+                    print(describe(current, mode))
+                elif name in ("help", "commands", "?"):
+                    print(f"Commands: {COMMANDS}")
                 else:
                     print(f"Unknown command: {command}")
 
@@ -144,23 +182,25 @@ def main() -> int:
             phrase_boundary = step % (8 * 8) == 0
             demo_boundary = step % (8 * max(1, args.demo_bars)) == 0
 
+            sampled = sampler.latest()
             if mode == "demo" and demo_boundary and bar > 0:
                 demo_scene_index = (demo_scene_index + 1) % len(SCENES)
-                target = PRESETS[SCENES[demo_scene_index]]
-            elif mode == "auto" and now - last_context_sample >= 15.0:
-                sampled = collector.sample()
+            if mode == "demo":
+                target = with_live_context(PRESETS[SCENES[demo_scene_index]], sampled)
+            elif mode == "auto":
                 # Timbre/density can drift immediately. Scene changes are held
                 # until a phrase boundary to preserve musical continuity.
                 scene = sampled.scene if phrase_boundary else target.scene
                 target = replace(sampled, scene=scene)
-                last_context_sample = now
+            else:
+                target = with_live_context(PRESETS[mode], sampled)
 
             if manual_energy is not None:
                 target = with_energy(target, manual_energy)
 
             if now >= next_tick:
                 dt = max(0.001, now - last_tick)
-                tau = 7.0 if mode == "demo" else 35.0
+                tau = 7.0 if mode == "demo" else (18.0 if mode != "auto" else 30.0)
                 current = current.smooth_towards(target, dt, tau)
 
                 meeting_mute = mode == "auto" and current.meeting_active
@@ -169,7 +209,7 @@ def main() -> int:
                     engine.play_step(step, current)
 
                 if not args.quiet and bar != last_reported_bar and bar % 4 == 0:
-                    print(describe(current, collector.last_app, mode))
+                    print(describe(current, mode))
                     last_reported_bar = bar
 
                 step += 1
@@ -186,6 +226,7 @@ def main() -> int:
         print(f"Audio startup failed: {error}", file=sys.stderr)
         return 1
     finally:
+        sampler.close()
         if engine:
             engine.panic()
         if server:

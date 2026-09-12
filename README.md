@@ -2,10 +2,11 @@
 
 **A private, adaptive soundtrack for your working day.**
 
-Dayphony turns lightweight signals—your frontmost app, local Git activity, calendar
-timing, and manual input—into a continuously evolving procedural soundtrack. The
-music keeps one clock running and changes gradually, so context switches do not
-restart the song or produce notification-like bursts.
+Dayphony turns lightweight signals—your frontmost app, open applications, CPU and
+memory pressure, local Git activity, calendar timing, optional local AI token rates,
+and manual input—into a continuously evolving procedural soundtrack. The music
+keeps one clock running and changes gradually, so context switches do not restart
+the song or produce notification-like bursts.
 
 > [!IMPORTANT]
 > Dayphony is an early macOS prototype. Its audio engine currently uses the
@@ -21,6 +22,8 @@ lives alongside your day:
 - flow adds motion without breaking concentration;
 - pressure increases rhythmic density and brightness;
 - recovery opens space while preserving a quiet pulse;
+- CPU, app switching, and AI activity add rhythmic and arpeggiated motion;
+- Git changes and context events become short, harmonically related accents;
 - changes are smoothed and structural transitions wait for phrase boundaries.
 
 Raw context stays on your computer. The music engine receives only normalized
@@ -66,6 +69,19 @@ events in the next four hours, and minutes until the next event. It never reques
 event titles, notes, locations, calendar names, or attendees. If access is denied,
 Dayphony continues without calendar input.
 
+To also estimate recent Codex and Claude token throughput from their local session
+records, opt in explicitly:
+
+```bash
+./run --mode auto --workspace /path/to/your/project --ai-telemetry
+```
+
+This adapter reads only timestamps and numeric token counters; it does not retain
+prompts, responses, tool calls, or file content. Codex and Claude do not currently
+offer Dayphony a stable live local TPS interface, so this best-effort adapter may
+need updating when either client changes its private log format. Missing or
+unrecognized logs simply produce `0.0t/s`.
+
 ## Live controls
 
 Type a command and press Return while Dayphony is running:
@@ -79,6 +95,7 @@ recovery
 energy 0.8
 intensity 0.6
 status
+help
 pause
 resume
 quit
@@ -92,6 +109,8 @@ Useful flags:
 ```text
 --duration SECONDS    stop automatically (useful for testing)
 --demo-bars BARS      bars per scene in demo mode (default: 8)
+--calendar            opt in to aggregate Calendar timing
+--ai-telemetry        opt in to local Codex/Claude token-rate estimates
 --quiet               print only errors
 --dry-run             exercise context and arrangement without starting audio
 ```
@@ -119,11 +138,11 @@ export DAYPHONY_SYNTHDEFS=/path/to/compiled/synthdefs
 ## Architecture
 
 ```text
-macOS / Git / Calendar
-          │
-          ▼
-   ContextCollector ──> DayState ──> MusicDirector ──OSC──> SuperSonic
-   (raw data local)      0..1 values   musical timing       continuous audio
+macOS / Git / Calendar / optional AI counters
+                    │
+                    ▼ background sampling
+             ContextCollector ──> DayState ──> MusicDirector ──OSC──> SuperSonic
+             (raw data local)      aggregates   musical timing       continuous audio
 ```
 
 The OSC layer and musical scheduler are separate. A future MCP server can expose

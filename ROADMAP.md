@@ -11,11 +11,14 @@
 
 ## 0.2 — Usable daily driver
 
+- [x] CPU, memory-pressure, open-app, and app-switch signals
+- [x] Opt-in local Codex and Claude token-rate estimates
+- [x] Multi-scale harmonic, melodic, rhythmic, and event variation
 - [ ] Native macOS menu-bar controller
 - [ ] Configurable app categories and musical mappings
 - [ ] Sleep/wake and audio-device recovery
 - [ ] Local preference and feedback storage
-- [ ] More musical palettes with shared transition rules
+- [x] More musical palettes with shared transition rules
 - [ ] Signed development builds
 
 ## 0.3 — Integration surface
@@ -23,6 +26,7 @@
 - [ ] MCP server for supervisory controls
 - [ ] Stable local JSON/OSC control protocol
 - [ ] Connector interface for task and calendar providers
+- [ ] Stable vendor-supported AI usage adapters
 - [ ] Privacy dashboard showing every active signal
 - [ ] Recording-free diagnostics and health checks
 

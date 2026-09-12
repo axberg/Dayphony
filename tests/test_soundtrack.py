@@ -1,14 +1,40 @@
 from __future__ import annotations
 
 import struct
+import tempfile
 import unittest
-from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from dayphony.context import ContextCollector, PRESETS, with_energy
-from dayphony.engine import AudioPaths
+from dayphony.context import ContextCollector, DayState, PRESETS, with_energy
+from dayphony.engine import AudioPaths, MusicEngine
 from dayphony.osc import decode_address, encode_message
+from dayphony.telemetry import AiTelemetry, LocalTokenMonitor, SystemTelemetry
+
+
+class FakeSystemMonitor:
+    def __init__(self, value: SystemTelemetry | None = None) -> None:
+        self.value = value or SystemTelemetry()
+
+    def sample(self) -> SystemTelemetry:
+        return self.value
+
+
+class FakeTokenMonitor:
+    def __init__(self, value: AiTelemetry) -> None:
+        self.value = value
+
+    def sample(self) -> AiTelemetry:
+        return self.value
+
+
+class FakeOscClient:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, tuple[object, ...]]] = []
+
+    def send(self, address: str, *arguments: object) -> None:
+        self.messages.append((address, arguments))
 
 
 class OscTests(unittest.TestCase):
@@ -40,11 +66,110 @@ class StateTests(unittest.TestCase):
     @patch.object(ContextCollector, "_frontmost_application", return_value="Visual Studio Code")
     @patch.object(ContextCollector, "_changed_files", return_value=3)
     def test_development_app_produces_focus_state(self, _git: object, _app: object) -> None:
-        collector = ContextCollector(Path.cwd())
+        collector = ContextCollector(Path.cwd(), system_monitor=FakeSystemMonitor())
         state = collector.sample()
         self.assertIn(state.scene, ("focus", "flow"))
         self.assertGreater(state.focus, 0.8)
         self.assertFalse(state.meeting_active)
+
+    def test_system_and_token_activity_reach_day_state(self) -> None:
+        system = SystemTelemetry(cpu_load=0.72, memory_load=0.81, open_apps=14, coding_apps=3)
+        tokens = AiTelemetry(codex_tps=18.0, claude_tps=4.0)
+        collector = ContextCollector(
+            Path.cwd(),
+            system_monitor=FakeSystemMonitor(system),
+            token_monitor=FakeTokenMonitor(tokens),
+        )
+        with (
+            patch.object(collector, "_frontmost_application", return_value="Terminal"),
+            patch.object(collector, "_changed_files", return_value=2),
+        ):
+            state = collector.sample()
+        self.assertEqual(state.open_apps, 14)
+        self.assertEqual(state.codex_tps, 18.0)
+        self.assertEqual(state.claude_tps, 4.0)
+        self.assertAlmostEqual(state.cpu_load, 0.72)
+        self.assertGreater(state.ai_activity, 0.0)
+
+    def test_git_change_becomes_a_discrete_event(self) -> None:
+        collector = ContextCollector(Path.cwd(), system_monitor=FakeSystemMonitor())
+        with (
+            patch.object(collector, "_frontmost_application", return_value="Terminal"),
+            patch.object(collector, "_changed_files", side_effect=(0, 2)),
+        ):
+            collector.sample()
+            state = collector.sample()
+        self.assertEqual(state.event_kind, "git_change")
+        self.assertEqual(state.event_serial, 1)
+
+
+class TokenTelemetryTests(unittest.TestCase):
+    def test_local_logs_are_reduced_to_deduplicated_token_rates(self) -> None:
+        now = datetime.now(timezone.utc).timestamp()
+        stamp = datetime.fromtimestamp(now - 10, timezone.utc).isoformat()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            codex = root / "codex"
+            claude = root / "claude"
+            codex.mkdir()
+            claude.mkdir()
+            (codex / "session.jsonl").write_text(
+                '{"type":"token_usage_record","timestamp":"%s","payload":{"usage":{"total_tokens":600}}}\n'
+                % stamp,
+                encoding="utf-8",
+            )
+            claude_record = (
+                '{"type":"assistant","timestamp":"%s","message":{"id":"message-1",'
+                '"usage":{"input_tokens":60,"output_tokens":20,"cache_read_input_tokens":40}}}'
+                % stamp
+            )
+            (claude / "session.jsonl").write_text(
+                f"{claude_record}\n{claude_record}\n",
+                encoding="utf-8",
+            )
+            sample = LocalTokenMonitor(codex, claude, window_seconds=60).sample(now=now)
+
+        self.assertAlmostEqual(sample.codex_tps, 10.0)
+        self.assertAlmostEqual(sample.claude_tps, 2.0)
+
+
+class MusicEngineTests(unittest.TestCase):
+    def test_phrase_and_event_variation_add_multiple_musical_roles(self) -> None:
+        client = FakeOscClient()
+        engine = MusicEngine(client)  # type: ignore[arg-type]
+        state = DayState(
+            scene="flow",
+            focus=0.82,
+            energy=0.82,
+            urgency=0.55,
+            cpu_load=0.48,
+            memory_load=0.34,
+            ai_activity=0.42,
+            open_apps=12,
+            git_changes=2,
+            active_app="Terminal",
+        )
+        engine.play_step(0, state)
+        first_progression = engine.progression_index
+        for step in range(32, 64):
+            engine.play_step(step, state)
+        event_state = DayState(
+            **{
+                **state.__dict__,
+                "event_serial": 1,
+                "event_kind": "ai_burst",
+                "event_strength": 0.8,
+            }
+        )
+        engine.play_step(64, event_state)
+
+        synths = {message[1][0] for message in client.messages if message[0] == "/s_new"}
+        self.assertIn("sonic-pi-prophet", synths)
+        self.assertIn("sonic-pi-subpulse", synths)
+        self.assertIn("sonic-pi-rhodey", synths)
+        self.assertIn("sonic-pi-beep", synths)
+        self.assertNotEqual(engine.progression_index, first_progression)
+        self.assertGreater(engine.event_steps, 0)
 
 
 class AudioPathTests(unittest.TestCase):
