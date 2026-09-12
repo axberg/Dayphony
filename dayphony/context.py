@@ -24,6 +24,9 @@ class DayState:
     memory_load: float = 0.0
     app_switch_rate: float = 0.0
     ai_activity: float = 0.0
+    ai_change: float = 0.0
+    codex_change: float = 0.0
+    claude_change: float = 0.0
     codex_tps: float = 0.0
     claude_tps: float = 0.0
     open_apps: int = 0
@@ -46,6 +49,9 @@ class DayState:
             memory_load=_clamp(self.memory_load),
             app_switch_rate=_clamp(self.app_switch_rate),
             ai_activity=_clamp(self.ai_activity),
+            ai_change=_signed_clamp(self.ai_change),
+            codex_change=_signed_clamp(self.codex_change),
+            claude_change=_signed_clamp(self.claude_change),
             event_strength=_clamp(self.event_strength),
             open_apps=max(0, self.open_apps),
             git_changes=max(0, self.git_changes),
@@ -54,9 +60,7 @@ class DayState:
     def smooth_towards(self, target: "DayState", dt: float, tau: float) -> "DayState":
         amount = 1.0 if tau <= 0 else 1.0 - math.exp(-max(0.0, dt) / tau)
         context_tau = min(tau, 6.0)
-        context_amount = (
-            1.0 if context_tau <= 0 else 1.0 - math.exp(-max(0.0, dt) / context_tau)
-        )
+        context_amount = 1.0 if context_tau <= 0 else 1.0 - math.exp(-max(0.0, dt) / context_tau)
         return DayState(
             scene=target.scene,
             focus=_mix(self.focus, target.focus, amount),
@@ -67,6 +71,9 @@ class DayState:
             memory_load=_mix(self.memory_load, target.memory_load, context_amount),
             app_switch_rate=_mix(self.app_switch_rate, target.app_switch_rate, context_amount),
             ai_activity=_mix(self.ai_activity, target.ai_activity, context_amount),
+            ai_change=target.ai_change,
+            codex_change=target.codex_change,
+            claude_change=target.claude_change,
             codex_tps=target.codex_tps,
             claude_tps=target.claude_tps,
             open_apps=target.open_apps,
@@ -121,8 +128,8 @@ class ContextCollector:
         self.last_app = "Unknown"
         self.last_calendar_error: str | None = None
         self._last_git_changes: int | None = None
-        self._last_ai_activity = 0.0
         self._last_cpu_load = 0.0
+        self._last_ai_event_at = float("-inf")
         self._switches: deque[float] = deque()
         self._event_serial = 0
         self._sampled_once = False
@@ -199,6 +206,7 @@ class ContextCollector:
             changed_files=changed_files,
             ai=ai,
             system=system,
+            now=now,
         )
 
         if urgency >= 0.70:
@@ -220,6 +228,13 @@ class ContextCollector:
             memory_load=system.memory_load,
             app_switch_rate=switch_rate,
             ai_activity=ai.activity,
+            ai_change=(
+                ai.codex_change
+                if abs(ai.codex_change) >= abs(ai.claude_change)
+                else ai.claude_change
+            ),
+            codex_change=ai.codex_change,
+            claude_change=ai.claude_change,
             codex_tps=ai.codex_tps,
             claude_tps=ai.claude_tps,
             open_apps=system.open_apps,
@@ -239,6 +254,7 @@ class ContextCollector:
         changed_files: int,
         ai: AiTelemetry,
         system: SystemTelemetry,
+        now: float,
     ) -> tuple[str, float]:
         event_kind = "none"
         event_strength = 0.0
@@ -247,15 +263,23 @@ class ContextCollector:
         if self._last_git_changes is not None and changed_files != self._last_git_changes:
             delta = abs(changed_files - self._last_git_changes)
             event_kind, event_strength = "git_change", min(0.45 + delta * 0.08, 0.85)
-        if ai.activity > 0.12 and self._last_ai_activity <= 0.12:
-            event_kind, event_strength = "ai_burst", 0.45 + ai.activity * 0.45
         if system.cpu_load > 0.68 and self._last_cpu_load <= 0.68:
             event_kind, event_strength = "cpu_surge", 0.65
+        if self._sampled_once and ai.movement >= 0.22 and now - self._last_ai_event_at >= 6.0:
+            if abs(ai.codex_change) >= abs(ai.claude_change):
+                source = "codex"
+                change = ai.codex_change
+            else:
+                source = "claude"
+                change = ai.claude_change
+            direction = "burst" if change > 0 else "cooldown"
+            event_kind = f"{source}_{direction}"
+            event_strength = min(0.55 + ai.movement * 0.40, 0.95)
+            self._last_ai_event_at = now
 
         if event_kind != "none":
             self._event_serial += 1
         self._last_git_changes = changed_files
-        self._last_ai_activity = ai.activity
         self._last_cpu_load = system.cpu_load
         self._sampled_once = True
         return event_kind, event_strength
@@ -395,6 +419,9 @@ def with_live_context(base: DayState, live: DayState) -> DayState:
         memory_load=live.memory_load,
         app_switch_rate=live.app_switch_rate,
         ai_activity=live.ai_activity,
+        ai_change=live.ai_change,
+        codex_change=live.codex_change,
+        claude_change=live.claude_change,
         codex_tps=live.codex_tps,
         claude_tps=live.claude_tps,
         open_apps=live.open_apps,
@@ -418,3 +445,7 @@ def _mix(current: float, target: float, amount: float) -> float:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _signed_clamp(value: float) -> float:
+    return max(-1.0, min(1.0, value))

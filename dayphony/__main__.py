@@ -65,7 +65,8 @@ def describe(state: DayState, mode: str) -> str:
         f"urgency={state.urgency:.2f} social={state.social_load:.2f} | "
         f"cpu={state.cpu_load:.0%} memory={state.memory_load:.0%} "
         f"apps={state.open_apps} switches={state.app_switch_rate * 3:.1f}/min "
-        f"codex={state.codex_tps:.1f}t/s claude={state.claude_tps:.1f}t/s"
+        f"codex={state.codex_tps:.1f}t/s claude={state.claude_tps:.1f}t/s "
+        f"ai-change={state.ai_change:+.2f}"
     )
 
 
@@ -120,6 +121,7 @@ def main() -> int:
         last_tick = started
         next_tick = started
         last_reported_bar = -1
+        last_reported_event = current.event_serial
         demo_scene_index = 0
 
         if not args.quiet:
@@ -207,6 +209,14 @@ def main() -> int:
                 if engine:
                     engine.set_muted(muted or meeting_mute)
                     engine.play_step(step, current)
+
+                if not args.quiet and current.event_serial != last_reported_event:
+                    print(
+                        f"music-response={current.event_kind} "
+                        f"strength={current.event_strength:.2f} "
+                        f"ai-change={current.ai_change:+.2f}"
+                    )
+                    last_reported_event = current.event_serial
 
                 if not args.quiet and bar != last_reported_bar and bar % 4 == 0:
                     print(describe(current, mode))

@@ -74,7 +74,12 @@ class StateTests(unittest.TestCase):
 
     def test_system_and_token_activity_reach_day_state(self) -> None:
         system = SystemTelemetry(cpu_load=0.72, memory_load=0.81, open_apps=14, coding_apps=3)
-        tokens = AiTelemetry(codex_tps=18.0, claude_tps=4.0)
+        tokens = AiTelemetry(
+            codex_tps=18.0,
+            claude_tps=4.0,
+            codex_change=0.6,
+            claude_change=-0.2,
+        )
         collector = ContextCollector(
             Path.cwd(),
             system_monitor=FakeSystemMonitor(system),
@@ -89,6 +94,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(state.codex_tps, 18.0)
         self.assertEqual(state.claude_tps, 4.0)
         self.assertAlmostEqual(state.cpu_load, 0.72)
+        self.assertAlmostEqual(state.ai_change, 0.6)
         self.assertGreater(state.ai_activity, 0.0)
 
     def test_git_change_becomes_a_discrete_event(self) -> None:
@@ -102,6 +108,22 @@ class StateTests(unittest.TestCase):
         self.assertEqual(state.event_kind, "git_change")
         self.assertEqual(state.event_serial, 1)
 
+    def test_ai_rate_change_becomes_a_source_specific_event(self) -> None:
+        tokens = AiTelemetry(codex_tps=800.0, codex_change=0.75)
+        collector = ContextCollector(
+            Path.cwd(),
+            system_monitor=FakeSystemMonitor(),
+            token_monitor=FakeTokenMonitor(tokens),
+        )
+        with (
+            patch.object(collector, "_frontmost_application", return_value="Terminal"),
+            patch.object(collector, "_changed_files", return_value=0),
+        ):
+            collector.sample()
+            state = collector.sample()
+        self.assertEqual(state.event_kind, "codex_burst")
+        self.assertGreater(state.event_strength, 0.8)
+
 
 class TokenTelemetryTests(unittest.TestCase):
     def test_local_logs_are_reduced_to_deduplicated_token_rates(self) -> None:
@@ -113,7 +135,8 @@ class TokenTelemetryTests(unittest.TestCase):
             claude = root / "claude"
             codex.mkdir()
             claude.mkdir()
-            (codex / "session.jsonl").write_text(
+            codex_session = codex / "session.jsonl"
+            codex_session.write_text(
                 '{"type":"token_usage_record","timestamp":"%s","payload":{"usage":{"total_tokens":600}}}\n'
                 % stamp,
                 encoding="utf-8",
@@ -127,10 +150,20 @@ class TokenTelemetryTests(unittest.TestCase):
                 f"{claude_record}\n{claude_record}\n",
                 encoding="utf-8",
             )
-            sample = LocalTokenMonitor(codex, claude, window_seconds=60).sample(now=now)
+            monitor = LocalTokenMonitor(codex, claude, window_seconds=60)
+            sample = monitor.sample(now=now)
+            next_stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+            with codex_session.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    '{"type":"token_usage_record","timestamp":"%s",'
+                    '"payload":{"usage":{"total_tokens":600}}}\n' % next_stamp
+                )
+            changed = monitor.sample(now=now + 1)
 
         self.assertAlmostEqual(sample.codex_tps, 10.0)
         self.assertAlmostEqual(sample.claude_tps, 2.0)
+        self.assertEqual(sample.movement, 0.0)
+        self.assertGreater(changed.codex_change, 0.9)
 
 
 class MusicEngineTests(unittest.TestCase):
@@ -145,6 +178,8 @@ class MusicEngineTests(unittest.TestCase):
             cpu_load=0.48,
             memory_load=0.34,
             ai_activity=0.42,
+            codex_tps=900.0,
+            claude_tps=700.0,
             open_apps=12,
             git_changes=2,
             active_app="Terminal",
@@ -157,8 +192,10 @@ class MusicEngineTests(unittest.TestCase):
             **{
                 **state.__dict__,
                 "event_serial": 1,
-                "event_kind": "ai_burst",
+                "event_kind": "codex_burst",
                 "event_strength": 0.8,
+                "codex_change": 1.0,
+                "ai_change": 1.0,
             }
         )
         engine.play_step(64, event_state)

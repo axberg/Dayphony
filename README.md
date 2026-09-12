@@ -22,7 +22,9 @@ lives alongside your day:
 - flow adds motion without breaking concentration;
 - pressure increases rhythmic density and brightness;
 - recovery opens space while preserving a quiet pulse;
-- CPU, app switching, and AI activity add rhythmic and arpeggiated motion;
+- CPU and app switching reshape rhythmic motion;
+- meaningful token-rate changes switch patterns and trigger source-specific replies:
+  Codex is a left-side digital pulse, while Claude is a right-side electric-key line;
 - Git changes and context events become short, harmonically related accents;
 - changes are smoothed and structural transitions wait for phrase boundaries.
 
@@ -80,7 +82,8 @@ This adapter reads only timestamps and numeric token counters; it does not retai
 prompts, responses, tool calls, or file content. Codex and Claude do not currently
 offer Dayphony a stable live local TPS interface, so this best-effort adapter may
 need updating when either client changes its private log format. Missing or
-unrecognized logs simply produce `0.0t/s`.
+unrecognized logs simply produce `0.0t/s`. The `ai-change` value in status output
+shows the normalized rate movement currently driving musical changes.
 
 ## Live controls
 

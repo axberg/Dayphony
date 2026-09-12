@@ -28,6 +28,8 @@ class SystemTelemetry:
 class AiTelemetry:
     codex_tps: float = 0.0
     claude_tps: float = 0.0
+    codex_change: float = 0.0
+    claude_change: float = 0.0
 
     @property
     def total_tps(self) -> float:
@@ -38,6 +40,10 @@ class AiTelemetry:
         # Input contexts can be very large and arrive in bursts. Log scaling
         # gives the music useful movement without letting one request dominate.
         return _clamp(math.log1p(self.total_tps) / math.log1p(50_000.0))
+
+    @property
+    def movement(self) -> float:
+        return max(abs(self.codex_change), abs(self.claude_change))
 
 
 class SystemMonitor:
@@ -149,6 +155,8 @@ class LocalTokenMonitor:
         self.window_seconds = window_seconds
         self._files: dict[str, list[Path]] = {"codex": [], "claude": []}
         self._last_discovery = 0.0
+        self._last_codex_tps: float | None = None
+        self._last_claude_tps: float | None = None
 
     def sample(self, now: float | None = None) -> AiTelemetry:
         wall_time = time.time() if now is None else now
@@ -156,10 +164,17 @@ class LocalTokenMonitor:
             self._files["codex"] = self._recent_files(self.codex_root)
             self._files["claude"] = self._recent_files(self.claude_root)
             self._last_discovery = wall_time
-        return AiTelemetry(
-            codex_tps=self._codex_tps(self._files["codex"], wall_time),
-            claude_tps=self._claude_tps(self._files["claude"], wall_time),
+        codex_tps = self._codex_tps(self._files["codex"], wall_time)
+        claude_tps = self._claude_tps(self._files["claude"], wall_time)
+        sample = AiTelemetry(
+            codex_tps=codex_tps,
+            claude_tps=claude_tps,
+            codex_change=_relative_change(codex_tps, self._last_codex_tps),
+            claude_change=_relative_change(claude_tps, self._last_claude_tps),
         )
+        self._last_codex_tps = codex_tps
+        self._last_claude_tps = claude_tps
+        return sample
 
     def _recent_files(self, root: Path) -> list[Path]:
         if not root.is_dir():
@@ -265,3 +280,13 @@ def _count_matching(apps: list[str], fragments: tuple[str, ...]) -> int:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def _relative_change(current: float, previous: float | None) -> float:
+    if previous is None:
+        return 0.0
+    # Compare against 15% of the previous rolling rate, with a small floor so
+    # low-volume sessions still produce useful movement without reacting to
+    # single-token noise.
+    scale = max(5.0, previous * 0.15)
+    return max(-1.0, min(1.0, (current - previous) / scale))

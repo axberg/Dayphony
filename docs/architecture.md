@@ -48,8 +48,10 @@ can free them safely.
 
 The scheduler uses an eighth-note grid with one continuous clock. Long pad releases
 overlap chord changes; bass preserves the pulse; several progression, motif, rhythm,
-and arpeggio banks rotate deterministically at musical boundaries. Context events
-add restrained accents without restarting the arrangement.
+and arpeggio banks rotate deterministically at musical boundaries. Meaningful AI
+rate changes immediately select a different variation lane: Codex drives a
+left-panned digital pulse and Claude a right-panned electric-key counterline.
+Context events add restrained multi-beat accents without restarting the arrangement.
 
 ## Failure boundaries
 
