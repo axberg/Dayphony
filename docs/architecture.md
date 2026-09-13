@@ -13,6 +13,8 @@ Git activity ──┤         │              aggregates      │          │
 calendar time ─┤         └─ raw data ends here          └─ clock   └─ speakers
 AI counters ───┤
 manual input ──┘
+
+Codex / Claude ─> stdio MCP adapter ─> 0600 Unix socket ─> director event queue
 ```
 
 ## Context layer
@@ -39,6 +41,19 @@ signals remain active.
 The director, not the audio engine, is the intended MCP boundary. This keeps agent
 latency and failures outside the real-time loop.
 
+## Agent control plane
+
+The running director owns a Unix-domain control socket under
+`~/Library/Caches/Dayphony`. Its directory is mode `0700` and the socket is mode
+`0600`. Requests are newline-delimited local JSON with a 16 KiB limit. The socket
+accepts only aggregate status reads and typed attention events; arbitrary text is
+not part of the protocol.
+
+`dayphony-mcp` is a stdio MCP server built with the official Python SDK. Codex or
+Claude launches one lightweight adapter process per client, and the adapter forwards
+valid tool calls to the single soundtrack process. `dayphony-signal` exposes the
+same typed event for shell scripts. Neither bridge owns audio or musical time.
+
 ## Audio layer
 
 Dayphony starts a private SuperSonic process bound to loopback on an ephemeral UDP
@@ -61,6 +76,8 @@ the arrangement.
 - Missing Git metadata produces a zero workload signal.
 - Missing or changed Codex/Claude local logs produce zero token activity.
 - Slow context adapters cannot block the music scheduler.
+- A missing control socket produces an actionable MCP/CLI error.
+- A second Dayphony process cannot replace an active control socket.
 - Missing audio assets stops startup with an actionable error.
 - `pause`, `quit`, signals, and normal shutdown clear the dedicated synth group.
 - The OSC command port binds to `127.0.0.1`, not the network.

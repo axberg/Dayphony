@@ -28,6 +28,10 @@ Do not commit generated audio, Sonic Pi binaries or SynthDefs, secrets, calendar
 content, application histories, AI session logs, prompts, responses, usage exports,
 or other personal context. Tests for adapters must use synthetic records.
 
+MCP and control tools should expose typed, minimal fields rather than arbitrary
+message content. Local control endpoints must remain user-only and must not bind a
+network interface.
+
 ## Musical changes
 
 Music should change continuously rather than restart. Preserve the single transport,

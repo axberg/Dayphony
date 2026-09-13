@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dayphony"
-version = "0.2.2"
+version = "0.3.0"
 description = "A private, adaptive soundtrack for your working day"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+mcp = ["mcp>=2.2,<3"]
+
 [project.urls]
 Homepage = "https://github.com/axberg/Dayphony"
 Repository = "https://github.com/axberg/Dayphony"
@@ -34,6 +37,8 @@ Issues = "https://github.com/axberg/Dayphony/issues"
 
 [project.scripts]
 dayphony = "dayphony.__main__:main"
+dayphony-mcp = "dayphony.mcp_server:main"
+dayphony-signal = "dayphony.control:signal_main"
 
 [tool.setuptools.packages.find]
 include = ["dayphony*"]

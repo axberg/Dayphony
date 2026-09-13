@@ -20,3 +20,6 @@ Reports involving these boundaries are especially valuable:
 - command or path injection through adapters or environment variables;
 - OSC listeners exposed beyond loopback;
 - unsafe audio levels or failure of pause/panic controls.
+- local control sockets that can be accessed by another user or replaced by a
+  second process;
+- MCP tools that accept or retain prompt, response, task, or credential content.

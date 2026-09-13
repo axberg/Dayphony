@@ -209,6 +209,18 @@ class MusicEngineTests(unittest.TestCase):
         self.assertNotEqual(engine.progression_index, first_progression)
         self.assertGreaterEqual(engine.event_steps, 15)
 
+    def test_agent_attention_overrides_ambient_telemetry_cues(self) -> None:
+        client = FakeOscClient()
+        engine = MusicEngine(client)  # type: ignore[arg-type]
+        engine.trigger_agent_attention("claude", "approval_needed", 1.0)
+        state = DayState(scene="flow", focus=0.8, energy=0.8, active_app="Terminal")
+        engine.play_step(32, state)
+
+        synths = [message[1][0] for message in client.messages if message[0] == "/s_new"]
+        self.assertIn("sonic-pi-blade", synths)
+        self.assertNotIn("sonic-pi-rhodey", synths)
+        self.assertGreaterEqual(engine.event_steps, 23)
+
 
 class AudioPathTests(unittest.TestCase):
     @patch.dict(

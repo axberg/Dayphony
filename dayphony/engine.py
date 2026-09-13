@@ -145,6 +145,7 @@ class MusicEngine:
     event_steps: int = 0
     section_variant: int = 0
     pending_harmonic_change: bool = False
+    agent_priority: float = 0.0
 
     PROGRESSIONS = (
         (
@@ -222,6 +223,16 @@ class MusicEngine:
             self.panic()
         self.muted = muted
 
+    def trigger_agent_attention(self, agent: str, reason: str, priority: float) -> None:
+        """Start a distinctive, musical call for human attention."""
+
+        self.event_kind = f"agent:{agent}:{reason}"
+        self.agent_priority = max(0.0, min(1.0, priority))
+        self.event_steps = max(8, round(8 + self.agent_priority * 16))
+        source_offset = {"codex": 1, "claude": 2}.get(agent, 3)
+        self.section_variant = (self.section_variant + source_offset) % 4
+        self.pending_harmonic_change = self.agent_priority >= 0.55
+
     def play_step(self, step: int, state: DayState, intro_bars: int = 4) -> None:
         if self.muted:
             return
@@ -244,17 +255,27 @@ class MusicEngine:
 
         if state.event_serial != self.last_event_serial:
             self.last_event_serial = state.event_serial
-            self.event_kind = state.event_kind
-            if self.event_kind.startswith(("codex_", "claude_")) or self.event_kind == "ai_burst":
-                self.event_steps = max(16, round(12 + state.event_strength * 8))
-                self.section_variant = state.event_serial % 4
-                self.pending_harmonic_change = True
-            else:
-                self.event_steps = max(2, round(2 + state.event_strength * 5))
+            agent_call_active = self.event_steps > 0 and self.event_kind.startswith("agent:")
+            if not agent_call_active:
+                self.event_kind = state.event_kind
+                if (
+                    self.event_kind.startswith(("codex_", "claude_"))
+                    or self.event_kind == "ai_burst"
+                ):
+                    self.event_steps = max(16, round(12 + state.event_strength * 8))
+                    self.section_variant = state.event_serial % 4
+                    self.pending_harmonic_change = True
+                else:
+                    self.event_steps = max(2, round(2 + state.event_strength * 5))
 
         harmony_changed = False
         if beat8 == 0 and self.pending_harmonic_change:
-            source_offset = 1 if self.event_kind.startswith("codex_") else 2
+            if self.event_kind.startswith(("codex_", "agent:codex:")):
+                source_offset = 1
+            elif self.event_kind.startswith(("claude_", "agent:claude:")):
+                source_offset = 2
+            else:
+                source_offset = 3
             self.progression_index = (
                 self.progression_index + source_offset + self.section_variant
             ) % len(self.PROGRESSIONS)
@@ -273,6 +294,7 @@ class MusicEngine:
         variation = self.section_variant
         burst_active = self.event_steps > 0 and self.event_kind.endswith("burst")
         cooldown_active = self.event_steps > 0 and self.event_kind.endswith("cooldown")
+        attention_active = self.event_steps > 0 and self.event_kind.startswith("agent:")
 
         # Long overlapping chords keep the bed continuous. A new chord arrives
         # every two bars. Voicing, width and brightness evolve by phrase.
@@ -382,7 +404,13 @@ class MusicEngine:
             (phrase + phrase_bar // 2 + variation) % len(self.MELODY_RHYTHMS)
         ]
         melody_slot = beat8 in rhythm and (beat8 in (0, 4) or energy > 0.56)
-        if developed >= 0.98 and melody_slot and state.scene != "recovery" and not cooldown_active:
+        if (
+            developed >= 0.98
+            and melody_slot
+            and state.scene != "recovery"
+            and not cooldown_active
+            and not attention_active
+        ):
             note = motif[note_index]
             if burst_active or (state.scene == "pressure" and phrase_bar >= 4):
                 note += 12
@@ -413,6 +441,9 @@ class MusicEngine:
         elif cooldown_active:
             codex_pattern = self.AI_PATTERNS[0] if self.event_kind.startswith("codex_") else ()
             claude_pattern = self.AI_PATTERNS[0] if self.event_kind.startswith("claude_") else ()
+        elif attention_active:
+            codex_pattern = ()
+            claude_pattern = ()
         if developed >= 0.98 and clarity > 0.58 and state.codex_tps > 0 and beat8 in codex_pattern:
             codex_index = (beat8 + phrase_bar * 2 + variation) % len(chord)
             codex_note = chord[codex_index] + 12
@@ -548,6 +579,42 @@ class MusicEngine:
                 sustain=0.04,
                 release=0.42,
                 cutoff=94 if cooling else 110,
+            )
+        elif self.event_kind.startswith("agent:"):
+            _, agent, reason = self.event_kind.split(":", 2)
+            slots = {
+                "input_needed": (0, 2, 4, 6),
+                "approval_needed": (0, 1, 4, 5),
+                "blocked": (0, 3, 4, 7),
+                "error": (0, 2, 4, 6),
+            }.get(reason, (0, 4))
+            if beat8 not in slots:
+                return
+            if reason in ("blocked", "error") and beat8 in (0, 4):
+                self._synth(
+                    "sonic-pi-subpulse",
+                    note=float(root - (12 if reason == "error" else 0)),
+                    amp=0.055 + self.agent_priority * 0.055,
+                    attack=0.01,
+                    sustain=0.10,
+                    release=0.40,
+                    cutoff=68,
+                    pulse_width=0.36,
+                    sub_amp=0.95,
+                )
+            pattern_index = slots.index(beat8)
+            chord_offset = -pattern_index if reason in ("blocked", "error") else pattern_index
+            note = chord[chord_offset % len(chord)] + (24 if agent == "codex" else 12)
+            synth = "sonic-pi-chiplead" if agent == "codex" else "sonic-pi-blade"
+            self._synth(
+                synth,
+                note=float(note),
+                amp=0.060 + self.agent_priority * 0.055,
+                pan=-0.48 if agent == "codex" else (0.48 if agent == "claude" else 0.0),
+                attack=0.01,
+                sustain=0.05,
+                release=0.42,
+                cutoff=108,
             )
         elif self.event_kind == "app_switch" and position in (0, 2):
             note = chord[(self.phrase_number + position) % len(chord)] + 12

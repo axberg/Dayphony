@@ -9,6 +9,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+from .control import AgentEvent, ControlError, ControlServer
 from .context import (
     ContextCollector,
     ContextSampler,
@@ -78,6 +79,14 @@ COMMANDS = (
 
 def main() -> int:
     args = parse_args()
+    agent_events: queue.Queue[AgentEvent] = queue.Queue()
+    control: ControlServer | None = ControlServer(agent_events)
+    try:
+        control.start()
+    except (ControlError, OSError) as error:
+        print(f"Local control unavailable: {error}", file=sys.stderr)
+        control = None
+
     collector = ContextCollector(
         args.workspace,
         include_calendar=args.calendar,
@@ -126,6 +135,8 @@ def main() -> int:
 
         if not args.quiet:
             print(f"Dayphony is running. Commands: {COMMANDS}")
+            if control:
+                print("Local agent control is ready")
 
         while not stop_requested:
             now = time.monotonic()
@@ -177,6 +188,22 @@ def main() -> int:
                 else:
                     print(f"Unknown command: {command}")
 
+            while True:
+                try:
+                    agent_event = agent_events.get_nowait()
+                except queue.Empty:
+                    break
+                if engine:
+                    engine.trigger_agent_attention(
+                        agent_event.agent,
+                        agent_event.reason,
+                        agent_event.priority,
+                    )
+                print(
+                    f"agent-attention={agent_event.agent} "
+                    f"reason={agent_event.reason} priority={agent_event.priority:.2f}"
+                )
+
             if stop_requested:
                 break
 
@@ -206,6 +233,22 @@ def main() -> int:
                 current = current.smooth_towards(target, dt, tau)
 
                 meeting_mute = mode == "auto" and current.meeting_active
+                if control:
+                    control.update_status(
+                        {
+                            "mode": mode,
+                            "scene": current.scene,
+                            "muted": muted or meeting_mute,
+                            "active_app": current.active_app,
+                            "focus": round(current.focus, 3),
+                            "energy": round(current.energy, 3),
+                            "urgency": round(current.urgency, 3),
+                            "cpu_load": round(current.cpu_load, 3),
+                            "memory_load": round(current.memory_load, 3),
+                            "codex_tps": round(current.codex_tps, 1),
+                            "claude_tps": round(current.claude_tps, 1),
+                        }
+                    )
                 if engine:
                     engine.set_muted(muted or meeting_mute)
                     engine.play_step(step, current)
@@ -236,6 +279,8 @@ def main() -> int:
         print(f"Audio startup failed: {error}", file=sys.stderr)
         return 1
     finally:
+        if control:
+            control.close()
         sampler.close()
         if engine:
             engine.panic()

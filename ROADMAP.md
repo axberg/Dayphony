@@ -23,7 +23,8 @@
 
 ## 0.3 — Integration surface
 
-- [ ] MCP server for supervisory controls
+- [x] Local MCP server for agent attention and aggregate status
+- [x] Permission-restricted Unix socket and shell signal client
 - [ ] Stable local JSON/OSC control protocol
 - [ ] Connector interface for task and calendar providers
 - [ ] Stable vendor-supported AI usage adapters

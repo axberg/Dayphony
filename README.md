@@ -41,6 +41,7 @@ values such as `focus`, `energy`, and `urgency`.
 
 Dayphony has no Python runtime dependencies. Close the Sonic Pi application before
 starting Dayphony so the two audio servers do not compete for the output device.
+The optional local MCP bridge uses the official Python MCP SDK.
 
 ## Quick start
 
@@ -122,6 +123,44 @@ Useful flags:
 
 Run `./run --help` for the complete command-line reference.
 
+## Agent attention through MCP
+
+Install the optional MCP bridge in a virtual environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[mcp]'
+```
+
+Register the local stdio server with Codex and Claude Code, replacing the example
+path with the absolute path to your clone:
+
+```bash
+codex mcp add dayphony -- /absolute/path/to/Dayphony/.venv/bin/dayphony-mcp
+claude mcp add --scope user dayphony -- /absolute/path/to/Dayphony/.venv/bin/dayphony-mcp
+```
+
+New agent sessions can then use:
+
+- `request_attention(agent, reason, priority)` when human input, approval, or help
+  is genuinely required;
+- `soundtrack_status()` to check that Dayphony is running and read its aggregate
+  musical state.
+
+Reasons are limited to `input_needed`, `approval_needed`, `blocked`, and `error`.
+No arbitrary message field exists, so prompts and task content cannot accidentally
+enter the soundtrack process. Codex and Claude have different musical signatures;
+the reason changes the contour, and priority controls the cue's strength and length.
+
+Scripts and non-MCP tools can use the same private control channel:
+
+```bash
+.venv/bin/dayphony-signal --agent codex --reason input_needed --priority 0.8
+```
+
+The soundtrack must be running for either bridge to accept a signal. MCP clients
+launch only the lightweight stdio adapter; they do not start a second audio engine.
+
 ## Install as a CLI
 
 An editable install exposes the `dayphony` command:
@@ -143,16 +182,17 @@ export DAYPHONY_SYNTHDEFS=/path/to/compiled/synthdefs
 ## Architecture
 
 ```text
-macOS / Git / Calendar / optional AI counters
-                    │
-                    ▼ background sampling
-             ContextCollector ──> DayState ──> MusicDirector ──OSC──> SuperSonic
-             (raw data local)      aggregates   musical timing       continuous audio
+macOS / Git / Calendar / optional AI counters       Codex / Claude / scripts
+                    │                                          │ MCP / CLI
+                    ▼ background sampling                      ▼
+             ContextCollector ──> DayState ──> MusicDirector <─ local socket
+                                             │
+                                             └──────OSC──────> SuperSonic
 ```
 
-The OSC layer and musical scheduler are separate. A future MCP server can expose
-supervisory tools such as `set_mode`, `set_intensity`, `pause`, and `status` without
-putting an LLM or network request in the timing-sensitive audio loop.
+The OSC layer, musical scheduler, and MCP adapter are separate. The MCP surface is
+deliberately narrow: it can request a typed attention cue or read aggregate status,
+without putting an LLM or network request in the timing-sensitive audio loop.
 
 See [Architecture](docs/architecture.md), [Privacy](docs/privacy.md), and the
 [roadmap](ROADMAP.md) for more detail.
