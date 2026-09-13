@@ -15,6 +15,8 @@ DEFAULT_SONIC_PI_ROOT = Path("/Applications/Sonic Pi.app/Contents/Resources")
 
 REQUIRED_SYNTHDEFS = (
     "sonic-pi-beep",
+    "sonic-pi-blade",
+    "sonic-pi-chiplead",
     "sonic-pi-rhodey",
     "sonic-pi-prophet",
     "sonic-pi-subpulse",
@@ -141,6 +143,8 @@ class MusicEngine:
     last_event_serial: int = 0
     event_kind: str = "none"
     event_steps: int = 0
+    section_variant: int = 0
+    pending_harmonic_change: bool = False
 
     PROGRESSIONS = (
         (
@@ -238,31 +242,46 @@ class MusicEngine:
             self.progression_index = (phrase + signature + activity) % len(self.PROGRESSIONS)
             self.motif_index = (phrase * 2 + signature + state.git_changes) % len(self.MOTIFS)
 
+        if state.event_serial != self.last_event_serial:
+            self.last_event_serial = state.event_serial
+            self.event_kind = state.event_kind
+            if self.event_kind.startswith(("codex_", "claude_")) or self.event_kind == "ai_burst":
+                self.event_steps = max(16, round(12 + state.event_strength * 8))
+                self.section_variant = state.event_serial % 4
+                self.pending_harmonic_change = True
+            else:
+                self.event_steps = max(2, round(2 + state.event_strength * 5))
+
+        harmony_changed = False
+        if beat8 == 0 and self.pending_harmonic_change:
+            source_offset = 1 if self.event_kind.startswith("codex_") else 2
+            self.progression_index = (
+                self.progression_index + source_offset + self.section_variant
+            ) % len(self.PROGRESSIONS)
+            self.motif_index = (self.motif_index + source_offset + self.section_variant) % len(
+                self.MOTIFS
+            )
+            self.pending_harmonic_change = False
+            harmony_changed = True
+
         progression, roots = self.PROGRESSIONS[self.progression_index]
         chord_index = (bar // 2) % len(progression)
         chord = progression[chord_index]
         root = roots[chord_index]
         clarity = 1.0 - state.memory_load * 0.42
         context_motion = min(1.0, state.cpu_load * 0.65 + state.ai_activity * 0.75)
-
-        if state.event_serial != self.last_event_serial:
-            self.last_event_serial = state.event_serial
-            self.event_kind = state.event_kind
-            if self.event_kind.startswith(("codex_", "claude_")) or self.event_kind == "ai_burst":
-                self.event_steps = max(8, round(6 + state.event_strength * 5))
-            else:
-                self.event_steps = max(2, round(2 + state.event_strength * 5))
-
-        # Context events immediately select a new variation lane. The downbeat
-        # stays stable, while bass, drums, melody, and AI voices all answer it.
-        variation = state.event_serial % 4
+        variation = self.section_variant
+        burst_active = self.event_steps > 0 and self.event_kind.endswith("burst")
+        cooldown_active = self.event_steps > 0 and self.event_kind.endswith("cooldown")
 
         # Long overlapping chords keep the bed continuous. A new chord arrives
         # every two bars. Voicing, width and brightness evolve by phrase.
-        if beat8 == 0 and bar % 2 == 0:
+        if beat8 == 0 and (bar % 2 == 0 or harmony_changed):
             chord_seconds = self.seconds_for_beats(7.5, state)
-            pad_amp = (0.016 + 0.013 * energy) * (0.88 + clarity * 0.12)
-            cutoff = (69 + focus * 19 + energy * 9) * clarity
+            section_gain = 0.68 if cooldown_active else (1.15 if burst_active else 1.0)
+            pad_amp = (0.016 + 0.013 * energy) * (0.88 + clarity * 0.12) * section_gain
+            section_cutoff = -13 if cooldown_active else (10 if burst_active else 0)
+            cutoff = ((69 + focus * 19 + energy * 9) * clarity) + section_cutoff
             width = 0.16 + min(state.open_apps, 18) / 18.0 * 0.12
             rotation = phrase % len(chord)
             voicing = chord[rotation:] + chord[:rotation]
@@ -287,14 +306,19 @@ class MusicEngine:
         bass_pattern = self.BASS_PATTERNS[
             (density + phrase_bar // 2 + variation) % len(self.BASS_PATTERNS)
         ]
+        if burst_active:
+            bass_pattern = self.BASS_PATTERNS[3]
+        elif cooldown_active:
+            bass_pattern = self.BASS_PATTERNS[0]
         bass_allowed = developed > 0.25 and beat8 in bass_pattern
         if bass_allowed:
             turn = beat8 in (5, 7) and phrase_bar in (3, 7)
             bass_note = root + (12 if turn or (beat8 == 6 and state.scene == "flow") else 0)
+            bass_gain = 1.18 if burst_active else (0.68 if cooldown_active else 1.0)
             self._synth(
                 "sonic-pi-subpulse",
                 note=float(bass_note),
-                amp=(0.040 + energy * 0.047) * developed,
+                amp=(0.040 + energy * 0.047) * developed * bass_gain,
                 pan=0.0,
                 attack=0.01,
                 sustain=0.10,
@@ -308,39 +332,43 @@ class MusicEngine:
         # not own the clock, so changing context cannot restart the song.
         if developed >= 0.72:
             syncopated_kick = (phrase + phrase_bar + variation) % 3 == 0 and beat8 == 3
+            if burst_active:
+                syncopated_kick = beat8 in (3, 6)
             if (
                 beat8 == 0
                 or (beat8 == 4 and energy > 0.38)
                 or (
-                    (urgency > 0.72 or state.cpu_load > 0.62)
+                    (urgency > 0.72 or state.cpu_load > 0.62 or burst_active)
                     and (beat8 in (6,) or syncopated_kick)
                 )
             ):
                 self._synth(
                     "sonic-pi-sc808_bassdrum",
                     note=34.0 + urgency * 2.0,
-                    amp=(0.090 + energy * 0.075) * developed,
+                    amp=(0.090 + energy * 0.075) * developed * (1.18 if burst_active else 1.0),
                     decay=0.55 + energy * 0.20,
                 )
-            if beat8 in (2, 6) and energy > 0.44:
+            snare_slots = (2,) if cooldown_active else (2, 6)
+            if beat8 in snare_slots and energy > 0.44:
                 self._synth(
                     "sonic-pi-sc808_snare",
-                    amp=0.025 + energy * 0.025,
+                    amp=(0.025 + energy * 0.025) * (1.20 if burst_active else 1.0),
                     decay=0.22,
                     mix=0.78,
                     pan=(-0.08 if beat8 == 2 else 0.08),
                 )
             hat_threshold = 0.26 if beat8 % 2 else 0.62
-            if energy > hat_threshold and beat8 != 0:
+            hat_allowed = not cooldown_active or beat8 in (3, 7)
+            if energy > hat_threshold and beat8 != 0 and hat_allowed:
                 accent = 1.25 if beat8 in (3, 7) else 1.0
                 self._synth(
                     "sonic-pi-sc808_closed_hihat",
-                    amp=(0.010 + energy * 0.013) * accent,
+                    amp=(0.010 + energy * 0.013) * accent * (1.35 if burst_active else 1.0),
                     decay=0.09 + urgency * 0.05,
                     pan=-0.22 if beat8 % 4 == 1 else 0.22,
                 )
             if (
-                (energy > 0.70 or state.app_switch_rate > 0.45)
+                (energy > 0.70 or state.app_switch_rate > 0.45 or burst_active)
                 and beat8 == 7
                 and phrase_bar in (3, 7)
             ):
@@ -354,14 +382,14 @@ class MusicEngine:
             (phrase + phrase_bar // 2 + variation) % len(self.MELODY_RHYTHMS)
         ]
         melody_slot = beat8 in rhythm and (beat8 in (0, 4) or energy > 0.56)
-        if developed >= 0.98 and melody_slot and state.scene != "recovery":
+        if developed >= 0.98 and melody_slot and state.scene != "recovery" and not cooldown_active:
             note = motif[note_index]
-            if state.scene == "pressure" and phrase_bar >= 4:
+            if burst_active or (state.scene == "pressure" and phrase_bar >= 4):
                 note += 12
             self._synth(
                 "sonic-pi-rhodey",
                 note=float(note - 12),  # this SynthDef sounds one octave above its note input
-                amp=(0.027 + energy * 0.025) * clarity,
+                amp=(0.027 + energy * 0.025) * clarity * (1.20 if burst_active else 1.0),
                 pan=-0.30 if note_index % 2 == 0 else 0.30,
                 attack=0.01,
                 decay=0.42,
@@ -379,16 +407,24 @@ class MusicEngine:
         claude_pattern = self.AI_PATTERNS[
             (variation + phrase_bar // 2 + 2) % len(self.AI_PATTERNS)
         ]
+        if burst_active:
+            codex_pattern = self.AI_PATTERNS[3 if self.event_kind.startswith("codex_") else 0]
+            claude_pattern = self.AI_PATTERNS[3 if self.event_kind.startswith("claude_") else 0]
+        elif cooldown_active:
+            codex_pattern = self.AI_PATTERNS[0] if self.event_kind.startswith("codex_") else ()
+            claude_pattern = self.AI_PATTERNS[0] if self.event_kind.startswith("claude_") else ()
         if developed >= 0.98 and clarity > 0.58 and state.codex_tps > 0 and beat8 in codex_pattern:
             codex_index = (beat8 + phrase_bar * 2 + variation) % len(chord)
             codex_note = chord[codex_index] + 12
             self._synth(
-                "sonic-pi-beep",
+                "sonic-pi-chiplead",
                 note=float(codex_note),
-                amp=(0.014 + state.ai_activity * 0.013) * clarity,
+                amp=(0.026 + state.ai_activity * 0.018)
+                * clarity
+                * (1.45 if burst_active else 1.0),
                 attack=0.01,
-                sustain=0.03,
-                release=0.20 + focus * 0.24,
+                sustain=0.02,
+                release=0.16 + focus * 0.18,
                 pan=-0.52 + codex_index * 0.08,
             )
         if (
@@ -400,17 +436,16 @@ class MusicEngine:
             claude_index = (7 - beat8 + phrase_bar + variation) % len(chord)
             claude_note = chord[claude_index] + 12
             self._synth(
-                "sonic-pi-rhodey",
-                note=float(claude_note - 12),
-                amp=(0.018 + state.ai_activity * 0.014) * clarity,
+                "sonic-pi-blade",
+                note=float(claude_note),
+                amp=(0.023 + state.ai_activity * 0.017)
+                * clarity
+                * (1.45 if burst_active else 1.0),
                 pan=0.50 - claude_index * 0.06,
                 attack=0.01,
-                decay=0.24,
-                sustain=0.03,
-                release=0.42,
-                vel=0.54,
-                mod_index=0.21,
-                mix=0.20,
+                sustain=0.04,
+                release=0.36,
+                cutoff=86 + state.ai_activity * 18,
             )
 
         # Phrase turnarounds make section boundaries legible without stopping
@@ -490,13 +525,13 @@ class MusicEngine:
             direction = -1 if cooling else 1
             note = chord[(beat8 + direction * position) % len(chord)] + (12 if cooling else 24)
             self._synth(
-                "sonic-pi-beep",
+                "sonic-pi-chiplead",
                 note=float(note),
-                amp=(0.019 if cooling else 0.026) * clarity,
+                amp=(0.045 if cooling else 0.075) * clarity,
                 pan=-0.58 + (position % 4) * 0.22,
                 attack=0.01,
                 sustain=0.02,
-                release=0.30,
+                release=0.24,
             )
         elif self.event_kind in ("claude_burst", "claude_cooldown"):
             cooling = self.event_kind.endswith("cooldown")
@@ -505,17 +540,14 @@ class MusicEngine:
             direction = -1 if cooling else 1
             note = chord[(beat8 + direction * position + 2) % len(chord)] + 12
             self._synth(
-                "sonic-pi-rhodey",
-                note=float(note - 12),
-                amp=(0.024 if cooling else 0.036) * clarity,
+                "sonic-pi-blade",
+                note=float(note),
+                amp=(0.042 if cooling else 0.068) * clarity,
                 pan=0.58 - (position % 4) * 0.20,
                 attack=0.01,
-                decay=0.20,
                 sustain=0.04,
-                release=0.48,
-                vel=0.62,
-                mod_index=0.25,
-                mix=0.22,
+                release=0.42,
+                cutoff=94 if cooling else 110,
             )
         elif self.event_kind == "app_switch" and position in (0, 2):
             note = chord[(self.phrase_number + position) % len(chord)] + 12

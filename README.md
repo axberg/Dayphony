@@ -25,6 +25,8 @@ lives alongside your day:
 - CPU and app switching reshape rhythmic motion;
 - meaningful token-rate changes switch patterns and trigger source-specific replies:
   Codex is a left-side digital pulse, while Claude is a right-side electric-key line;
+- AI bursts open a bright, dense two-bar mini-section; cooldowns answer with a
+  darker, deliberately sparse two-bar section;
 - Git changes and context events become short, harmonically related accents;
 - changes are smoothed and structural transitions wait for phrase boundaries.
 

@@ -50,8 +50,10 @@ The scheduler uses an eighth-note grid with one continuous clock. Long pad relea
 overlap chord changes; bass preserves the pulse; several progression, motif, rhythm,
 and arpeggio banks rotate deterministically at musical boundaries. Meaningful AI
 rate changes immediately select a different variation lane: Codex drives a
-left-panned digital pulse and Claude a right-panned electric-key counterline.
-Context events add restrained multi-beat accents without restarting the arrangement.
+left-panned chiplead and Claude a right-panned blade counterline. Bursts and
+cooldowns create contrasting dense/bright and sparse/dark two-bar mini-sections,
+including a bar-aligned harmonic and motif change. Context events do not restart
+the arrangement.
 
 ## Failure boundaries
 

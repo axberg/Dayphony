@@ -204,9 +204,10 @@ class MusicEngineTests(unittest.TestCase):
         self.assertIn("sonic-pi-prophet", synths)
         self.assertIn("sonic-pi-subpulse", synths)
         self.assertIn("sonic-pi-rhodey", synths)
-        self.assertIn("sonic-pi-beep", synths)
+        self.assertIn("sonic-pi-chiplead", synths)
+        self.assertIn("sonic-pi-blade", synths)
         self.assertNotEqual(engine.progression_index, first_progression)
-        self.assertGreater(engine.event_steps, 0)
+        self.assertGreaterEqual(engine.event_steps, 15)
 
 
 class AudioPathTests(unittest.TestCase):
